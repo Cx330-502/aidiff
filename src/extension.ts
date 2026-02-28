@@ -7,89 +7,57 @@ import * as os from 'os';
 const backupMap = new Map<string, string>();
 
 export function activate(context: vscode.ExtensionContext) {
+    // 创建状态栏按钮
+    const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    statusBarItem.command = 'aiDiff.start';
+    statusBarItem.text = `$(diff) AI Diff`;
+    statusBarItem.tooltip = '点击运行 AI Diff (快捷键: Alt+D)';
+    statusBarItem.show();
+    context.subscriptions.push(statusBarItem);
 
-    // --- 0. 首次引导 (同旧版，稍作保留) ---
-    const GUIDE_KEY = 'aiDiff.hasShownGuide.v2'; // 升级版本号，让用户重看新教程
-    if (!context.globalState.get(GUIDE_KEY)) {
-        setTimeout(() => {
-            showUserGuide();
-            context.globalState.update(GUIDE_KEY, true);
-        }, 1000);
+
+    // --- 1. 启动 Diff (支持选中部分替换) ---
+let startDisposable = vscode.commands.registerCommand('aiDiff.start', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+
+    const currentDoc = editor.document;
+    const currentUri = currentDoc.uri;
+    const selection = editor.selection;
+    
+    // 始终备份【全文】，这样 Diff 才能对齐
+    const fullOriginalContent = currentDoc.getText();
+
+    let aiContent = ""; 
+    try {
+        aiContent = await vscode.env.clipboard.readText();
+    } catch (e) {
+        vscode.window.showErrorMessage('无法读取剪贴板内容');
+        return;
     }
-    context.subscriptions.push(vscode.commands.registerCommand('aiDiff.showGuide', () => showUserGuide()));
 
+    // 创建临时备份文件 (存放全文)
+    const fileExt = path.extname(currentUri.fsPath);
+    const fileName = path.basename(currentUri.fsPath, fileExt);
+    const backupFilePath = path.join(os.tmpdir(), `[Old]_${fileName}_${Date.now()}${fileExt}`);
 
-    // --- 1. 启动 Diff (核心逻辑重写) ---
-    let startDisposable = vscode.commands.registerCommand('aiDiff.start', async () => {
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) {
-            vscode.window.showErrorMessage('请先打开一个代码文件');
-            return;
-        }
+    fs.writeFileSync(backupFilePath, fullOriginalContent, 'utf8');
+    const backupUri = vscode.Uri.file(backupFilePath);
+    backupMap.set(currentUri.fsPath, backupFilePath);
 
-        const currentDoc = editor.document;
-        const currentUri = currentDoc.uri;
-        
-        if (currentUri.scheme === 'untitled') {
-            vscode.window.showWarningMessage('请先保存当前文件到硬盘，然后再使用此功能。');
-            return;
-        }
+    // 执行替换
+    const isPartial = !selection.isEmpty;
+    const replaceRange = isPartial 
+        ? new vscode.Range(selection.start, selection.end) 
+        : new vscode.Range(0, 0, currentDoc.lineCount, 0);
 
-        // 1. 获取内容
-        const originalContent = currentDoc.getText(); // 这是你的旧代码
-        let aiContent = ""; 
-        
-        try {
-            aiContent = await vscode.env.clipboard.readText(); // 这是 AI 代码
-        } catch (e) {
-            vscode.window.showErrorMessage('无法读取剪贴板内容');
-            return;
-        }
-
-        if (!aiContent.trim()) {
-            vscode.window.showWarningMessage('剪贴板为空，无法进行替换');
-            return;
-        }
-
-        // 2. 创建临时备份文件 (存放 Old Code)
-        const fileExt = path.extname(currentUri.fsPath);
-        const fileName = path.basename(currentUri.fsPath, fileExt);
-        const tempDir = os.tmpdir();
-        // 命名格式：Original_Backup_文件名.ext
-        const backupFileName = `[Backup]_${fileName}_${Date.now()}${fileExt}`;
-        const backupFilePath = path.join(tempDir, backupFileName);
-
-        try {
-            fs.writeFileSync(backupFilePath, originalContent, 'utf8');
-        } catch (err) {
-            vscode.window.showErrorMessage(`无法创建备份文件: ${err}`);
-            return;
-        }
-
-        const backupUri = vscode.Uri.file(backupFilePath);
-        
-        // 记录映射关系，方便后续“放弃修改”
-        backupMap.set(currentUri.fsPath, backupFilePath);
-
-        // 3. 将 AI 代码直接写入当前编辑器 (支持 Ctrl+Z 撤销)
-        const fullRange = new vscode.Range(0, 0, currentDoc.lineCount, 0);
-        const editSuccess = await editor.edit(editBuilder => {
-            editBuilder.replace(fullRange, aiContent);
-        });
-
-        if (!editSuccess) {
-            vscode.window.showErrorMessage('写入 AI 代码失败，文件可能只读');
-            return;
-        }
-
-        // 4. 打开 Diff：左边是备份(Old)，右边是当前文件(New/AI)
-        // 用户直接在右边修改，按 Ctrl+S 就是保存文件本身
-        const title = `Backup (Read-only) ↔ Current File (Editable)`;
-        
-        await vscode.commands.executeCommand('vscode.diff', backupUri, currentUri, title);
-        
-        vscode.window.setStatusBarMessage(`AI Diff: 已应用新代码。左侧为备份，右侧为当前文件。满意请直接保存。`, 5000);
+    await editor.edit(editBuilder => {
+        editBuilder.replace(replaceRange, aiContent);
     });
+
+    // 打开 Diff：现在左右两边都是全文，差异点会被精确高亮
+    await vscode.commands.executeCommand('vscode.diff', backupUri, currentUri, 'Original ↔ AI Modified');
+});
 
     // --- 2. 放弃修改 (还原) ---
     // 如果用户反悔了，想恢复到备份的状态
@@ -166,7 +134,7 @@ function showUserGuide() {
         <h2>工作流</h2>
         <ol>
             <li><strong>复制 AI 代码</strong>：在 ChatGPT 等处复制。</li>
-            <li><strong>启动 (Ctrl+Alt+D)</strong>：
+            <li><strong>启动 (Alt+D)</strong>：
                 <ul>
                     <li>插件会<strong>立即</strong>将 AI 代码写入你当前的文件。</li>
                     <li>同时将你原来的代码保存为<strong>临时备份</strong>。</li>

@@ -2,11 +2,11 @@
   "name": "aidiff",
   "displayName": "AiDiff Helper",
   "description": "快速合并 AI 代码：自动将剪贴板内容写入当前文件，并创建原文件备份进行 Diff 对比。",
-  "version": "0.0.2", 
+  "version": "0.0.5", 
   "publisher": "Cx330-502",
   "repository": {
     "type": "git",
-    "url": "https://github.com/你的用户名/aidiff" 
+    "url": "https://github.com/Cx330-502/aidiff" 
   },
   "engines": {
     "vscode": "^1.98.0"
@@ -45,8 +45,7 @@
     "keybindings": [
       {
         "command": "aiDiff.start",
-        "key": "ctrl+alt+d",
-        "mac": "cmd+alt+d",
+        "key": "alt+d",
         "when": "editorTextFocus"
       }
     ]
@@ -58,6 +57,7 @@
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "package": "npm run check-types && npm run lint && node esbuild.js --production",
+    "vsix": "npx -p @vscode/vsce vsce package",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
@@ -76,5 +76,6 @@
     "typescript": "^5.9.3",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2"
-  }
+  },
+  "icon": "icon.png"
 }
